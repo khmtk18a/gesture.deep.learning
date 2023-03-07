@@ -1,6 +1,7 @@
-import click, cv2, numpy as np
-from khmt import Camera, cropped_frame
+import click, cv2, numpy as np, torch
+from khmt import Camera, cropped_frame, Network, classes
 from mediapipe.python.solutions import drawing_utils, hands, hands_connections
+import torchvision.transforms as transforms
 
 @click.group()
 def main():
@@ -12,6 +13,9 @@ def main():
 def generate(n: int, c: int):
     i = 0
     isCapture = False
+    net = Network().load_from_checkpoint('./gesture.ckpt')
+    net.eval()
+    transform = transforms.ToTensor()
     with Camera() as cap, hands.Hands(
         max_num_hands=1,
         min_detection_confidence=0.5,
@@ -29,10 +33,6 @@ def generate(n: int, c: int):
 
             x_offset, y_offset = image.shape[1] - 300, 0
 
-            cv2.rectangle(image, (x_offset, y_offset), (x_offset+300, y_offset+300), (255, 0, 0))
-            cv2.putText(image, f'{i}/{n}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-            cv2.imshow('camera', image)
-
             area = cropped_frame(image, x_offset, y_offset, 300, 300)
             area = cv2.cvtColor(area, cv2.COLOR_BGR2RGB)
             area.flags.writeable = False
@@ -49,12 +49,22 @@ def generate(n: int, c: int):
                         drawing_utils.DrawingSpec(thickness=10),
                         drawing_utils.DrawingSpec(thickness=10)
                     )
-            cv2.imshow('hand', handArea)
+                handImage = cv2.resize(handArea, (32,32))
+                tensor = transform(handImage)
+                output = net(tensor.unsqueeze(0))
+                _, predicted = torch.max(output, 1)
+                ret = classes[int(predicted)]
+                cv2.putText(image, f'{ret}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                cv2.putText(image, f'{i}/{n}', (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
 
-            if isCapture:
-                output = cv2.resize(handArea, (32,32))
-                cv2.imwrite(f"./data/{c}/{i}.jpg", output)
-                i += 1
+                if isCapture:
+                    cv2.imwrite(f"./data/{c}/{i}.jpg", handImage)
+                    i += 1
+
+
+            cv2.rectangle(image, (x_offset, y_offset), (x_offset+300, y_offset+300), (255, 0, 0))
+            cv2.imshow('camera', image)
+            cv2.imshow('hand', handArea)
 
             match cv2.waitKey(5) & 0xFF:
                 case 115:
