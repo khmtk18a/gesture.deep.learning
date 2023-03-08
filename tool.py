@@ -1,7 +1,8 @@
 import click, cv2, numpy as np, torch
-from khmt import Camera, cropped_frame, Network, classes
+from khmt import Camera, cropped_frame
 from mediapipe.python.solutions import drawing_utils, hands, hands_connections
-import torchvision.transforms as transforms
+from torch import Tensor
+from torchvision.transforms import Compose, Grayscale, ToTensor, ToPILImage
 
 @click.group()
 def main():
@@ -13,9 +14,11 @@ def main():
 def generate(n: int, c: int):
     i = 0
     isCapture = False
-    net = Network().load_from_checkpoint('./gesture.ckpt')
+    classes = ('Paper', 'Rock', 'Scissors')
+
+    net = torch.jit.load('./gesture.pt') # type: ignore
     net.eval()
-    transform = transforms.ToTensor()
+    transforms = Compose([ToPILImage(), Grayscale(), ToTensor()])
     with Camera() as cap, hands.Hands(
         max_num_hands=1,
         min_detection_confidence=0.5,
@@ -38,7 +41,6 @@ def generate(n: int, c: int):
             area.flags.writeable = False
             result = hand.process(area)
 
-
             handArea = np.zeros((300, 300, 3), np.uint8)
             if result.multi_hand_landmarks: # type: ignore
                 for hand_landmarks in result.multi_hand_landmarks: # type: ignore
@@ -50,9 +52,14 @@ def generate(n: int, c: int):
                         drawing_utils.DrawingSpec(thickness=10)
                     )
                 handImage = cv2.resize(handArea, (32,32))
-                tensor = transform(handImage)
+
+                tensor = transforms(handImage)
+                assert isinstance(tensor, Tensor)
+
                 output = net(tensor.unsqueeze(0))
-                _, predicted = torch.max(output, 1)
+                probs = torch.nn.functional.softmax(output, 1)
+                score, predicted = torch.max(probs, 1)
+
                 ret = classes[int(predicted)]
                 cv2.putText(image, f'{ret}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
                 cv2.putText(image, f'{i}/{n}', (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
@@ -60,7 +67,6 @@ def generate(n: int, c: int):
                 if isCapture:
                     cv2.imwrite(f"./data/{c}/{i}.jpg", handImage)
                     i += 1
-
 
             cv2.rectangle(image, (x_offset, y_offset), (x_offset+300, y_offset+300), (255, 0, 0))
             cv2.imshow('camera', image)
@@ -71,6 +77,7 @@ def generate(n: int, c: int):
                     isCapture = True
                 case 27:
                     break
+
 
 if __name__ == '__main__':
     main()
