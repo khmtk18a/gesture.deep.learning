@@ -2,4 +2,4 @@ __pycache__
 .venv
 tb_logs
 *.ckpt
-*.pt
+# *.pt
