@@ -4,7 +4,7 @@ import torch
 from mediapipe.python.solutions import drawing_utils, hands, hands_connections
 from typing import Optional, Tuple, Callable
 from torch import Tensor
-from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage
+from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Grayscale
 
 
 class BreakException(Exception):
@@ -25,7 +25,8 @@ class Camera():
         print('Camera is closed.')
 
 
-_transforms = Compose([ToPILImage(), Resize((32, 32)), ToTensor()])
+_transforms = Compose(
+    [ToPILImage(), Grayscale(), Resize((32, 32)), ToTensor()])
 
 
 def predict(net, image: cv2.Mat):
@@ -56,7 +57,7 @@ def camera(fn: Callable[[cv2.Mat, Tuple[bool, cv2.Mat]], None]):
 
                 hand_image: Optional[cv2.Mat] = None
                 if result.multi_hand_landmarks:  # type: ignore
-                    hand_landmarks = result.multi_hand_landmarks[0] # type: ignore
+                    hand_landmarks = result.multi_hand_landmarks[0]  # type: ignore
 
                     points = [(int(landmark.x*image.shape[1]), int(landmark.y*image.shape[0]))
                               for landmark in hand_landmarks.landmark]
@@ -67,7 +68,7 @@ def camera(fn: Callable[[cv2.Mat, Tuple[bool, cv2.Mat]], None]):
                     x_max, y_max = int(x + r), int(y + r)
 
                     black_image = np.zeros(image.shape, dtype=np.uint8)
-                    thickness = int(r/8) # thanks to Vu Ding Dung
+                    thickness = int(r/8)  # thanks to Vu Ding Dung
                     drawing_utils.draw_landmarks(
                         black_image,
                         hand_landmarks,
@@ -79,7 +80,7 @@ def camera(fn: Callable[[cv2.Mat, Tuple[bool, cv2.Mat]], None]):
                     hand_image = cv2.getRectSubPix(
                         black_image, (x_max - x_min, y_max - y_min), (x, y))
 
-                    del black_image # release memory
+                    del black_image  # release memory
 
                     image = cv2.rectangle(
                         image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
