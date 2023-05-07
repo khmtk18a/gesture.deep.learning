@@ -1,161 +1,303 @@
-import cv2
+import threading
 import pygame
-import torch
-from khmt import BreakException, camera, predict
-from random import choice
-from pygame import Surface
-from threading import Thread
-from typing import Tuple, Optional
+from random import randrange as rnd, randint
 
-pygame.init()
-
-# Set up the screen
-SCREEN_WIDTH = 400
-SCREEN_HEIGHT = 600
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-
-# Define colors
-WHITE, BLACK = (255, 255, 255), (0, 0, 0)
-RED, GREEN, BLUE = (255, 0, 0), (0, 255, 0), (0, 0, 255)
-
-# Set up the ball
-BALL_SIZE = 20
-ball = pygame.Rect(SCREEN_WIDTH // 2 - BALL_SIZE // 2,
-                   SCREEN_HEIGHT // 2 - BALL_SIZE // 2, BALL_SIZE, BALL_SIZE)
-ball_vel = [choice([-5, 5]), 5]
-
-# Set up the paddle
-PADDLE_WIDTH = 100
-PADDLE_HEIGHT = 20
-paddle = pygame.Rect(SCREEN_WIDTH // 2 - PADDLE_WIDTH // 2,
-                     SCREEN_HEIGHT - PADDLE_HEIGHT - 10, PADDLE_WIDTH, PADDLE_HEIGHT)
-PADDLE_SPEED = 8
-
-# Set up the bricks
-BRICK_WIDTH = 70
-BRICK_HEIGHT = 30
-BRICK_PADDING = 10
-BRICKS_PER_ROW = 5
-NUM_ROWS = 5
-brick_color = choice([RED, GREEN, BLUE])
-bricks = []
-
-for row in range(NUM_ROWS):
-    color = brick_color
-    for brick in range(BRICKS_PER_ROW):
-        brick_rect = pygame.Rect(
-            brick * (BRICK_WIDTH + BRICK_PADDING) + BRICK_PADDING,
-            row * (BRICK_HEIGHT + BRICK_PADDING) + BRICK_PADDING + 50,
-            BRICK_WIDTH,
-            BRICK_HEIGHT
-        )
-        bricks.append((brick_rect, color))
-    brick_color = choice([RED, GREEN, BLUE])
-
-# Set up the score
-font = pygame.font.Font(pygame.font.get_default_font(), 36)
-
-clock = pygame.time.Clock()
-net = torch.jit.load('./gesture.pt')  # type: ignore
-net.eval()
+import  cv2, numpy as np, torch
+from mediapipe.python.solutions import drawing_utils, hands, hands_connections
+from torch import Tensor
+from torchvision.transforms import Compose, Grayscale, ToTensor, ToPILImage
 
 
-def game_ctrl(_, hand_detect: Tuple[bool, cv2.Mat]):
-    global current_image, move
-    has_hand, hand_image = hand_detect
-    if has_hand:
-        conf, predicted = predict(net, hand_image)
-        if conf > 0.8:
-            move = predicted
-        hand_image = cv2.cvtColor(hand_image, cv2.COLOR_BGR2RGB)
-        current_image = pygame.surfarray.make_surface(
-            hand_image.transpose((1, 0, 2)))
-    else:
-        current_image = None
+class Camera():
+    def __init__(self) -> None:
+        self.vid = cv2.VideoCapture(0)
 
-    if not running:
-        raise BreakException('Game exited...')
+    def __enter__(self):
+        print('Camera is open.')
+        return self.vid
+
+    def __exit__(self, *args):
+        self.vid.release()
+        cv2.destroyAllWindows()
+        print('Camera is closed.')
+
+action = 0
 
 
-current_image: Optional[Surface] = None
-score = 0
-move = 2
-running = True
+def game():
+    global action
+# Ratio between width and height
+    ratio = 4.5/8
 
-t = Thread(target=camera, args=(game_ctrl,))
-t.start()
+    pygame.init()
 
-while running:
-    # Handle events
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-            t.join()
+# Height and Width 
+    HEIGHT = int(pygame.display.Info().current_h * 0.8)
+    WIDTH  = int(HEIGHT * ratio)
 
-    # Move the ball
-    ball.left += ball_vel[0]
-    ball.top += ball_vel[1]
+# Fps setting
+    clock = pygame.time.Clock()
+    fps:int = 60
 
-    # Check for collisions with the walls
-    if ball.left < 0 or ball.right > SCREEN_WIDTH:
-        ball_vel[0] *= -1
-    if ball.top < 0:
-        ball_vel[1] *= -1
+# Screen setting
+    sc      = pygame.display.set_mode((WIDTH, HEIGHT))
 
-    # Check for collisions with the paddle
-    if ball.colliderect(paddle):
-        ball_vel[1] *= -1
+# Background setting
+    ranBg   = randint(0, 4)
+    bg      = pygame.image.load(f"./bg/{ranBg}.jpg").convert()
+    bg_ratio= bg.get_width() / bg.get_height()
+    bg_width= HEIGHT * bg_ratio
+    bg_height= HEIGHT
+    bg      = pygame.transform.scale(bg, (bg_width, bg_height))
 
-    # Check for collisions with the bricks
-    for brick in bricks:
-        if ball.colliderect(brick[0]):
-            bricks.remove(brick)
-            ball_vel[1] *= -1
-            score += 10
+# Block setting
+    lines   = 6
+    blocks_in_line = 5
+    space_between_blocks:float = WIDTH / blocks_in_line * 0.1
+    block_width:float = WIDTH / blocks_in_line
+    block_height:float = block_width / 2 + space_between_blocks
+    real_block_width:float = block_width - 2 * space_between_blocks
+    real_block_height:float = real_block_width / 2
 
-    if move == 0 and paddle.left > 0:
-        paddle.left -= PADDLE_SPEED
-    elif move == 1 and paddle.right < SCREEN_WIDTH:
-        paddle.right += PADDLE_SPEED
+# Create blocks
+    block_list:list = [pygame.Rect(space_between_blocks + block_width * i, space_between_blocks + block_height * j,
+                            real_block_width, real_block_height) for i in range(blocks_in_line) for j in range(lines)]
+    color_list:list = [(rnd(30, 256), rnd(30, 256), rnd(30, 256))
+                for i in range(10) for j in range(4)]
 
-    # Clear the screen
-    screen.fill(WHITE)
+# Paddle settings
+    paddle_w = WIDTH/3
+    paddle_h = paddle_w/5
+    paddle_speed = int(WIDTH/30)
+    paddle_margin_bottom = HEIGHT/20
+    paddle = pygame.Rect(WIDTH // 2 - paddle_w // 2, HEIGHT -
+                        paddle_h - paddle_margin_bottom, paddle_w, paddle_h)
 
-    # Draw the ball, paddle, and bricks
-    pygame.draw.circle(screen, BLACK, (ball.left + BALL_SIZE //
-                                       2, ball.top + BALL_SIZE // 2), BALL_SIZE // 2)
-    pygame.draw.rect(screen, BLACK, paddle)
-    for brick in bricks:
-        pygame.draw.rect(screen, brick[1], brick[0])
+# Ball settings
+    ball_radius = HEIGHT/35
+    ball_speed = 3
+    ball_rect = int(ball_radius * 2 ** 0.5)
+    ball = pygame.Rect(rnd(2*ball_rect, WIDTH -2*ball_rect),
+                    HEIGHT // 2, ball_rect, ball_rect)
+# Direct setting
+    dx = 1 
+    dy =-1
 
-    # Draw the score
-    score_text = font.render("Score: {}".format(score), True, BLACK)
-    screen.blit(score_text, (10, 10))
+# Title setting
+    font = pygame.font.Font('font/font.ttf', int(WIDTH/5))
+    title_ready  = font.render('Ready', True, pygame.Color('red'))
+    title_ready_x, title_ready_y =  int(WIDTH/2 - title_ready.get_width()/2), int(HEIGHT/2 - title_ready.get_height()/2)
+    title_win  = font.render('You win', True, pygame.Color('red'))
+    title_win_x, title_win_y =  int(WIDTH/2 - title_win.get_width()/2), int(HEIGHT/2 - title_win.get_height()/2)
+    title_lose  = font.render('You lose', True, pygame.Color('red'))
+    title_lose_x, title_lose_y =  int(WIDTH/2 - title_lose.get_width()/2), int(HEIGHT/2 - title_lose.get_height()/2)
 
-    # Draw the detection area
-    if isinstance(current_image, Surface):
-        hand = pygame.transform.scale(current_image, (50, 50))
-        screen.blit(hand, (350, 0))
+# Status: ready - play - win - lose
+    status = "ready"
 
-    # Update the screen
-    pygame.display.update()
+    def reset():
+    # Reset fps
+        nonlocal fps
+        fps = 60
+    # Reset background
+        nonlocal ranBg, bg, bg_ratio, bg_width, bg_height
+        ranBg   = randint(0, 4)
+        bg      = pygame.image.load(f"./bg/{ranBg}.jpg").convert()
+        bg_ratio= bg.get_width() / bg.get_height()
+        bg_width= HEIGHT * bg_ratio
+        bg_height= HEIGHT
+        bg      = pygame.transform.scale(bg, (bg_width, bg_height))
+    # Reset block
+        nonlocal block_list, color_list
+        block_list = [pygame.Rect(space_between_blocks + block_width * i, space_between_blocks + block_height * j,
+                            real_block_width, real_block_height) for i in range(blocks_in_line) for j in range(lines)]
+        color_list = [(rnd(30, 256), rnd(30, 256), rnd(30, 256))
+                for i in range(10) for j in range(4)]
+    # Reset paddle
+        nonlocal paddle
+        paddle = pygame.Rect(WIDTH // 2 - paddle_w // 2, HEIGHT -
+                        paddle_h - paddle_margin_bottom, paddle_w, paddle_h)
+    # Reset ball & direct
+        nonlocal ball, dx, dy
+        ball = pygame.Rect(rnd(2*ball_rect, WIDTH - 2*ball_rect),
+                        HEIGHT // 2, ball_rect, ball_rect)
+        dx, dy = 1, -1
+        
 
-    # Check for game over
-    if ball.bottom > SCREEN_HEIGHT:
-        # Game over
-        # running = False
-        # game_over_text = font.render("Game Over!", True, BLACK)
-        # screen.blit(game_over_text, (SCREEN_WIDTH // 2 - game_over_text.get_width() // 2, SCREEN_HEIGHT // 2 - game_over_text.get_height() // 2))
-        # pygame.display.update()
-        # pygame.time.delay(3000)
-        ball_vel[1] *= -1
 
-    # Show the FPS in the window title
-    fps = int(clock.get_fps())
-    pygame.display.set_caption("My Pygame Game (FPS: {})".format(fps))
 
-    # Limit the FPS to 16
-    clock.tick(24)
+    def detect_collision(dx, dy, ball, rect):
+        if dx > 0:
+            delta_x = ball.right - rect.left
+        else:
+            delta_x = rect.right - ball.left
+        if dy > 0:
+            delta_y = ball.bottom - rect.top
+        else:
+            delta_y = rect.bottom - ball.top
 
-# Quit the game
-pygame.quit()
+        if abs(delta_x - delta_y) < 10:
+            dx, dy = -dx, -dy
+        elif delta_x > delta_y:
+            dy = -dy
+        elif delta_y > delta_x:
+            dx = -dx
+        return dx, dy
+
+
+    while True:
+    # Allow quit
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                exit()
+
+    #   Draw background
+        sc.blit(bg, (0, 0))
+        sc.blit(bg, (bg_width, 0))
+        if status == "ready":
+            sc.blit(title_ready, (title_ready_x, title_ready_y))
+            if action == 1:
+                status = 'play'
+                continue
+        elif status == "win":
+            sc.blit(title_win, (title_win_x, title_win_y))
+            if action == 1:
+                status = 'play'
+                continue
+        elif status == 'lose':
+            sc.blit(title_lose, (title_lose_x, title_lose_y))
+            if action == 1:
+                status = 'play'
+                continue
+        else :
+        #   Draw blocks
+            [pygame.draw.rect(sc, color_list[color], block)
+            for color, block in enumerate(block_list)]
+            pygame.draw.rect(sc, pygame.Color('darkorange'), paddle)
+            pygame.draw.circle(sc, pygame.Color('gold'), ball.center, ball_radius)
+
+            ball.x += ball_speed * dx
+            ball.y += ball_speed * dy
+        # Collision left right
+            if ball.centerx < ball_radius or ball.centerx > WIDTH - ball_radius:
+                dx = -dx
+            # collision top
+            if ball.centery < ball_radius:
+                dy = -dy
+        # Collision paddle
+            if ball.colliderect(paddle) and dy > 0:
+                dx, dy = detect_collision(dx, dy, ball, paddle)
+            
+        # Collision blocks
+            hit_index = ball.collidelist(block_list)
+            if hit_index != -1:
+                hit_rect = block_list.pop(hit_index)
+                hit_color = color_list.pop(hit_index)
+                dx, dy = detect_collision(dx, dy, ball, hit_rect)
+            # special effect
+                hit_rect.inflate_ip(ball.width * 2, ball.height * 2)
+                pygame.draw.rect(sc, hit_color, hit_rect)
+                fps += 1
+        # Win, game over
+            if ball.bottom > HEIGHT:
+                status = 'lose'
+                reset()
+            elif not len(block_list):
+                status = 'win'
+                reset()
+                continue
+        # Control
+            if action ==2 and paddle.left > 0:
+                paddle.left -= paddle_speed
+            if action ==3 and paddle.right < WIDTH:
+                paddle.right += paddle_speed
+
+        pygame.display.flip()
+        clock.tick(fps)
+
+
+
+
+def recognized():
+    global action
+    net = torch.jit.load('./gesture.pt') # type: ignore
+    net.eval()
+    transforms = Compose([ToPILImage(), Grayscale(), ToTensor()])
+    with Camera() as cap, hands.Hands(
+        max_num_hands=1,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    ) as hand:
+        while cap.isOpened():
+            success: bool; image: cv2.Mat
+            success, image = cap.read()
+
+            if not success:
+                print("Ignoring empty camera frame.")
+                continue
+
+            image = cv2.flip(image, 1)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image.flags.writeable = False
+
+            background = np.ones(image.shape, np.uint8)
+            background = 255* background
+            handImage = np.ones((32,32,3), np.uint8)
+            handImage = 255* handImage
+
+            result = hand.process(image)
+
+            if result.multi_hand_landmarks: # type: ignore
+                for hand_landmarks in result.multi_hand_landmarks: # type: ignore
+                
+                    points = [(int(landmark.x*image.shape[1]), int(landmark.y*image.shape[0]))
+                              for landmark in hand_landmarks.landmark]
+
+                    (x, y), r = cv2.minEnclosingCircle(np.array(points))
+                    r = r*1.1
+                    x_min, y_min = int(x - r), int(y - r)
+                    x_max, y_max = int(x + r), int(y + r)
+                    tn = int(r/8)
+                    drawing_utils.draw_landmarks(
+                        background,
+                        hand_landmarks,
+                        hands_connections.HAND_CONNECTIONS, # type: ignore
+                        drawing_utils.DrawingSpec(
+                            color=(0,0,0),
+                            thickness=tn),
+                        drawing_utils.DrawingSpec(
+                            color=(0,0,0),
+                            thickness=tn)
+                    )
+                    try:
+                        handImage = cv2.resize(background[y_min: y_max, x_min: x_max ], (32, 32))
+                        cv2.rectangle(background, (x_max, y_max), (x_min, y_min), (0, 0, 0))
+                        tensor = transforms(handImage)
+                        assert isinstance(tensor, Tensor)
+
+                        output = net(tensor.unsqueeze(0))
+                        probs = torch.nn.functional.softmax(output, 1)
+                        score, predicted = torch.max(probs, 1)
+                        if score[0] > 0.9:
+                            action = predicted
+                        else:
+                            action = 0
+                    except :
+                        pass
+
+            cv2.imshow('camera', background)
+
+            if cv2.waitKey(5) & 0xFF == 115:
+                    isCapture = True
+            elif  cv2.waitKey(5) & 0xFF == 27:
+                    break
+
+
+
+
+
+if __name__ == '__main__':
+    t1 = threading.Thread(target=recognized, args=())
+    t1.start()
+    game()
+    t1.join()
