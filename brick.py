@@ -21,7 +21,7 @@ def game():
 
 # Fps setting
     clock = pygame.time.Clock()
-    fps:int = 24
+    fps:int = 60
 
 # Screen setting
     sc      = pygame.display.set_mode((WIDTH, HEIGHT))
